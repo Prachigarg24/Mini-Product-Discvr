@@ -70,11 +70,11 @@ If no products match, return: { "productIds": [], "summary": "No products matche
             products: matchedProducts,
         });
     } catch (error) {
-        // Log the real error server-side for debugging, never expose it to the client
+        // Log the real error server-side for debugging
         console.error("[/api/ask] Error:", error);
         return NextResponse.json(
             { error: "AI service is currently unavailable. Please try again." },
             { status: 502 }
-        );
+        )
     }
 }
