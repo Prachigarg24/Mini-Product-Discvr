@@ -1,12 +1,10 @@
 // POST /api/ask
 import { NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { products } from "@/data/products";
 
 export async function POST(request) {
   try {
-    const body = await request.json();
-    const { query } = body;
+    const { query } = await request.json();
 
     if (!query || query.trim() === "") {
       return NextResponse.json(
@@ -15,77 +13,76 @@ export async function POST(request) {
       );
     }
 
-    // Check API Key properly
     if (!process.env.GEMINI_API_KEY) {
-      console.error("GEMINI_API_KEY is missing!");
       return NextResponse.json(
-        { error: "Server configuration error." },
+        { error: "Missing GEMINI_API_KEY" },
         { status: 500 }
       );
     }
 
-    // Initialize Gemini INSIDE function (important for Vercel)
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-    //  Use stable & fast model
-    const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
-    });
-
-    // Build catalog text
+    // 🔹 Build smaller catalog text (keep short for free tier)
     const catalogText = products
       .map(
         (p) =>
-          `${p.id} | ${p.name} | ${p.category} | $${p.price} | tags: ${p.tags.join(", ")}`
+          `${p.id} | ${p.name} | ${p.category} | ${p.tags.join(", ")}`
       )
       .join("\n");
 
-    const prompt = `You are a product discovery assistant for an online store.
-A user has typed a natural language search query. Your job is to find the most relevant products.
+    const prompt = `
+User search: "${query}"
 
-User query: "${query}"
-
-Product catalog:
+Products:
 ${catalogText}
 
-Instructions:
-- Identify which products best match the user's query
-- Return ONLY a valid JSON object
-- JSON format:
-{
-  "productIds": ["p1"],
-  "summary": "Short explanation"
-}
-
-If no products match:
+Return ONLY valid JSON:
 {
   "productIds": [],
-  "summary": "No products matched your search."
-}`;
+  "summary": ""
+}
+`;
 
-    // Call Gemini
-    const result = await model.generateContent(prompt);
-    const rawText = result.response.text();
+    // 🔥 Direct Gemini REST API call (Free tier compatible)
+    const geminiResponse = await fetch(
+      `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: prompt }],
+            },
+          ],
+        }),
+      }
+    );
 
-    // Clean markdown if Gemini adds it
-    const cleanedText = rawText
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```\s*$/i, "")
-      .trim();
+    const data = await geminiResponse.json();
 
-    // Safe JSON parse
-    let parsed;
-    try {
-      parsed = JSON.parse(cleanedText);
-    } catch (err) {
-      console.error("Invalid JSON from Gemini:", cleanedText);
+    if (!geminiResponse.ok) {
+      console.error("Gemini API Error:", data);
       return NextResponse.json(
-        { error: "AI returned invalid format." },
+        { error: "Gemini API request failed" },
         { status: 500 }
       );
     }
 
-    // Map IDs to real products
+    const rawText =
+      data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch (err) {
+      console.error("Invalid JSON from Gemini:", rawText);
+      return NextResponse.json(
+        { error: "AI returned invalid format" },
+        { status: 500 }
+      );
+    }
+
     const matchedProducts = (parsed.productIds || [])
       .map((id) => products.find((p) => p.id === id))
       .filter(Boolean);
@@ -97,10 +94,9 @@ If no products match:
     });
 
   } catch (error) {
-    console.error("[/api/ask] Full Error:", error);
-
+    console.error("SERVER ERROR:", error);
     return NextResponse.json(
-      { error: "AI service is currently unavailable. Please try again." },
+      { error: "AI service unavailable" },
       { status: 502 }
     );
   }
